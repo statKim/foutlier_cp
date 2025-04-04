@@ -2,3 +2,6 @@
 RData/
 figures/
 Rmd/
+.Rproj.user
+ADHD-200/
+*.Rproj
