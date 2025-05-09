@@ -1,7 +1,7 @@
 # Conformal Outlier Detection for Multivariate Functional Data
 
 This is the R code to implement the simulations and real data analysis of the following paper:
-> Hyunsung Kim and Junyong Park (2025+). Conformal Outlier Detection for Multivariate Functional Data, *submitted*.
+> Hyunsung Kim and Junyong Park (2025+). Conformal Outlier Detection for Multivariate Functional Data, *manuscript*.
 
 ## Description
 
