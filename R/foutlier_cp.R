@@ -2,8 +2,9 @@
 library(tidyverse)
 library(mrfDepth)
 library(fda)
+library(fdasrvf)
+library(fdaoutlier)
 library(mvtnorm)
-library(progress)  # show progress bar
 
 # Parallel computation
 library(doSNOW)
@@ -26,7 +27,8 @@ library(foreach)
 #' @param n_cores number of cores for parallel computing in `type = "depth_transform"`. Default is 1.
 #' @param seed random seed number. Default is NULL.
 #' @param ... See additional options for `split_conformal_fd()`
-foutlier_cp <- function(X, X_test, 
+foutlier_cp <- function(X, 
+                        X_test, 
                         type = "depth_transform", 
                         type_depth = "projdepth",
                         transform = c("D0","D1","D2"),
@@ -79,7 +81,6 @@ foutlier_cp <- function(X, X_test,
 #' @param alpha coverage level (Only used for `type = "esssup"`)
 #' @param rho a proportion of the proper training set for the split conformal prediction. Default is 0.5.
 #' @param n_calib a number of calibration set (If it is set, `rho` is ignored.)
-#' @param weight 
 #' @param ccv CCV (calibration-conditional valid) adjustments are performed for marginal conformal p-values. It performs Simes, asymptotic adjustments. Default is TRUE.
 #' @param delta parmeters for CCV adjustments.
 #' @param k parmeters for CCV adjustments.
@@ -88,14 +89,14 @@ foutlier_cp <- function(X, X_test,
 #' @param mfd_alpha alpha for `mrfDepth::mfd()`. See `mrfDepth::mfd()` for details.
 #' @param seed random seed number. Default is NULL.
 #' @param ... additional options for `FOCSVM()`
-split_conformal_fd <- function(X, X_test, 
+split_conformal_fd <- function(X, 
+                               X_test, 
                                type = "depth_transform", 
                                type_depth = "projdepth",
                                transform = c("D0","D1","D2"),
                                train_type = "clean",
                                alpha = 0.1, 
                                rho = 0.5, n_calib = NULL,
-                               weight = FALSE,
                                ccv = TRUE, delta = 0.1, k = NULL,
                                individual = TRUE,
                                n_cores = 1,
@@ -117,7 +118,7 @@ split_conformal_fd <- function(X, X_test,
                           type = type, 
                           type_depth = type_depth,
                           transform = transform,
-                          weight = weight)
+                          n_cores = n_cores)
     idx_train_null <- obj$idx_clean_null
     X <- lapply(X, function(x){ x[idx_train_null, ] })
     n <- nrow(X[[1]])
@@ -157,7 +158,80 @@ split_conformal_fd <- function(X, X_test,
     transform <- "D0"
   }
   
-  if (type == "esssup") {
+  if (type == "efdm") {
+    # Transform data structure for `fdasrvf`
+    arr_train <- array(NA, c(p, m, n_train))
+    arr_calib <- array(NA, c(p, m, n_calib))
+    arr_test <- array(NA, c(p, m, n_test))
+    for (i in 1:p) {
+      arr_train[i, , ] <- t(X_train[[i]])
+      arr_calib[i, , ] <- t(X_calib[[i]])
+      arr_test[i, , ] <- t(X_test[[i]])
+    }
+    
+    # Karcher mean of training set (input: p-m-n array; output: p-m matrix)
+    k_mean <- multivariate_karcher_mean(arr_train, ncores = n_cores, maxit = 10)$betamean
+    
+    # Elastic distance of training and calibration set (additional translation distance)
+    dist_train <- matrix(NA, n_train, 3)
+    dist_calib <- matrix(NA, n_calib, 3)
+    dist_test <- matrix(NA, n_test, 3)
+    
+    n_max <- max(n_train, n_calib, n_test)
+    # Using parallel computation
+    cl <- makeCluster(n_cores)
+    registerDoSNOW(cl)
+    pkgs <- c("fdasrvf")
+    res_cv <- foreach(i = 1:n_max, .packages = pkgs) %dopar% {
+      out <- list()
+      if (i <= n_train) {
+        # Elastic distance of training set (additional translation distance)
+        dist_obj <- calc_shape_dist(k_mean, arr_train[, , i])
+        out$train_score <- c(dist_obj$d, dist_obj$dx, max(abs(k_mean - arr_train[, , i])))
+      }
+      
+      if (i <= n_calib) {
+        # Elastic distance of calibration set (additional translation distance)
+        dist_obj <- calc_shape_dist(k_mean, arr_calib[, , i])
+        out$calib_score <- c(dist_obj$d, dist_obj$dx, max(abs(k_mean - arr_calib[, , i])))
+      }
+      
+      if (i <= n_test) {
+        # Elastic distance of test set (additional translation distance)
+        dist_obj <- calc_shape_dist(k_mean, arr_test[, , i])
+        out$test_score <- c(dist_obj$d, dist_obj$dx, max(abs(k_mean - arr_test[, , i])))
+      }
+      
+      return(out)
+    }
+    stopCluster(cl)   # End parallel backend
+    
+    for (i in 1:n_max) {
+      if (i <= n_train) {
+        dist_train[i, ] <- res_cv[[i]]$train_score
+      }
+      
+      if (i <= n_calib) {
+        dist_calib[i, ] <- res_cv[[i]]$calib_score
+      }
+      
+      if (i <= n_test) {
+        dist_test[i, ] <- res_cv[[i]]$test_score
+      }
+    }
+    
+    # Aggregate two distances
+    min_train <- apply(dist_train, 2, min)
+    max_train <- apply(dist_train, 2, max)
+    
+    nonconform_score_calib <- apply(dist_calib, 1, function(row){ mean((row - min_train) / (max_train - min_train)) })
+    nonconform_score_test <- apply(dist_test, 1, function(row){ mean((row - min_train) / (max_train - min_train)) })
+    
+    # Conformal p-value (marginal)
+    conf_pvalue_marg <- sapply(nonconform_score_test, function(s){
+      (1 + sum(nonconform_score_calib >= s)) / (n_calib + 1)
+    })
+  } else if (type == "esssup") {
     # Point predictor
     pred <- lapply(X_train, function(x){ colMeans(x) })
     
@@ -182,17 +256,6 @@ split_conformal_fd <- function(X, X_test,
       apply(1, max)
     idx_cutoff <- ceiling((1 - alpha) * (n_calib + 1))
     k_s <- sort(nonconform_score_calib)[idx_cutoff]
-    
-    # # Coverage check
-    # sum(nonconform_score_calib <= k_s) / n_calib
-    
-    # # Conformal prediction band
-    # lb <- mapply(function(pred_p, s_ftn_p){
-    #   pred_p - k_s*s_ftn_p
-    # }, pred, s_ftn, SIMPLIFY = F)
-    # ub <- mapply(function(pred_p, s_ftn_p){
-    #   pred_p + k_s*s_ftn_p
-    # }, pred, s_ftn, SIMPLIFY = F)
     
     
     # Conformal p-value (marginal)
@@ -269,6 +332,7 @@ split_conformal_fd <- function(X, X_test,
                                  depthOptions = depthOptions)
         
         out <- list(
+          train_score = -as.numeric(depth_values_calib$MFDdepthX),
           calib_score = -as.numeric(depth_values_calib$MFDdepthZ),
           test_score = -as.numeric(depth_values_test$MFDdepthZ)
         )
@@ -337,26 +401,13 @@ split_conformal_fd <- function(X, X_test,
     
     
     if (length(transform) > 1) {
-      # # Scaling depths for each transformed curves
-      # mean_calib <- colMeans(nonconform_score_calib)
-      # sd_calib <- apply(nonconform_score_calib, 2, sd)
-      # nonconform_score_calib <- t( (t(nonconform_score_calib) - mean_calib) / sd_calib )
-      # nonconform_score_test <- t( (t(nonconform_score_test) - mean_calib) / sd_calib )
-      
       # Weights for weighted average
-      if (isTRUE(weight)) {
-        weight_calib <- t( apply(nonconform_score_calib_indiv, 1, function(x){ exp(x) / sum(exp(x)) }) )
-        weight_test <- t( apply(nonconform_score_test_indiv, 1, function(x){ exp(x) / sum(exp(x)) }) )
-      } else {
-        weight_calib <- 1/length(transform)
-        weight_test <- 1/length(transform)
-      }
+      weight_calib <- 1/length(transform)
+      weight_test <- 1/length(transform)
       
       # Aggregate scores from transformations
       nonconform_score_calib <- rowSums(nonconform_score_calib_indiv * weight_calib)
       nonconform_score_test <- rowSums(nonconform_score_test_indiv * weight_test)
-      # nonconform_score_calib <- apply(nonconform_score_calib_indiv, 1, max)
-      # nonconform_score_test <- apply(nonconform_score_test_indiv, 1, max)
     } else {
       nonconform_score_calib <- as.numeric(nonconform_score_calib_indiv)
       nonconform_score_test <- as.numeric(nonconform_score_test_indiv)
@@ -377,8 +428,6 @@ split_conformal_fd <- function(X, X_test,
     transform = transform,
     nonconform_score = list(calib = nonconform_score_calib,
                             test = nonconform_score_test),
-    # weight_calib = weight_calib,
-    # weight_test = weight_test,
     conf_pvalue = data.frame(marginal = conf_pvalue_marg)
   )
   
@@ -473,8 +522,7 @@ get_clean_null <- function(X,
                            transform = c("D0","D1","D2"),
                            individual = TRUE,
                            mfd_alpha = 0,
-                           n_cores = 1,
-                           weight = FALSE) {
+                           n_cores = 1) {
   n <- nrow(X[[1]])  # number of training data
   m <- ncol(X[[1]])  # number of timepoints
   p <- length(X)   # number of functional covariates
@@ -500,7 +548,45 @@ get_clean_null <- function(X,
   
   
   # Outlier detection using non-conformity scores (Not CP based method)
-  if (type == "esssup") {
+  if (type == "efdm") {
+    # Transform data structure for `fdasrvf`
+    arr_train <- array(NA, c(p, m, n))
+    for (i in 1:p) {
+      arr_train[i, , ] <- t(X[[i]])
+    }
+    
+    # Karcher mean of training set (input: p-m-n array; output: p-m matrix)
+    k_mean <- multivariate_karcher_mean(arr_train, ncores = n_cores, maxit = 10)$betamean
+    
+    # # Elastic distance of training and calibration set (additional translation distance)
+    # dist_train <- matrix(NA, n, 3)
+    # for (i in 1:n) {
+    #   # Elastic distance of training set (additional translation distance)
+    #   dist_obj <- calc_shape_dist(k_mean, arr_train[, , i])
+    #   dist_train[i, ] <- c(dist_obj$d, dist_obj$dx, max(abs(k_mean - arr_train[, , i])))
+    # }
+    
+    # Using parallel computation
+    cl <- makeCluster(n_cores)
+    registerDoSNOW(cl)
+    pkgs <- c("fdasrvf")
+    dist_train <- foreach(i = 1:n, .combine = "rbind", .packages = pkgs) %dopar% {
+      # Elastic distance of training set (additional translation distance)
+      dist_obj <- calc_shape_dist(k_mean, arr_train[, , i])
+      # dist_train[i, ] <- c(dist_obj$d, dist_obj$dx, max(abs(k_mean - arr_train[, , i])))
+      out <- c(dist_obj$d, dist_obj$dx, max(abs(k_mean - arr_train[, , i])))
+      
+      return(out)
+    }
+    stopCluster(cl)   # End parallel backend
+    
+    # Aggregate two distances
+    min_train <- apply(dist_train, 2, min)
+    max_train <- apply(dist_train, 2, max)
+    
+    nonconform_score <- apply(dist_train, 1, function(row){ mean((row - min_train) / (max_train - min_train)) })
+    
+  } else if (type == "esssup") {
     alpha <- 0.1
     
     # Point predictor
@@ -612,12 +698,7 @@ get_clean_null <- function(X,
       }
     }
     
-    # Weights for weighted average
-    if (isTRUE(weight)) {
-      weights <- t( apply(nonconform_score_indiv, 1, function(x){ exp(x) / sum(exp(x)) }) )
-    } else {
-      weights <- 1/length(transform)
-    }
+    weights <- 1/length(transform)
     
     # Aggregate scores from transformations
     nonconform_score <- rowSums(nonconform_score_indiv * weights)

@@ -3,8 +3,7 @@
 ### - Outlier detection for test set
 ######################################################
 library(tidyverse)
-library(fdaoutlier)
-library(progress)
+library(progress)  # show progress bar
 source("R/foutlier_cp.R")
 
 n <- 1000   # number of training data (proper training + calibration)
@@ -18,6 +17,7 @@ alpha <- 0.1  # coverage level
 n_cores <- 10   # number of cores for competing methods
 
 sim_model <- 1:4  # simulation models
+
 
 # Simulation
 res <- list()
@@ -46,7 +46,8 @@ for (sim_model_idx in 1:length(sim_model)) {
   fdr_bh <- list(
     T_projdepth = fdr_res,
     projdepth = fdr_res,
-    esssup = fdr_res
+    esssup = fdr_res,
+    efdm = fdr_res
   )
   tpr_bh <- fdr_bh
   
@@ -120,10 +121,26 @@ for (sim_model_idx in 1:length(sim_model)) {
     })
     
     
+    # EFDM
+    obj_efdm <- foutlier_cp(X = data_train, 
+                            X_test = data_test,
+                            type = "efdm",
+                            alpha = alpha,
+                            n_cores = n_cores,
+                            seed = b)
+    fdr_bh$efdm[b, ] <- sapply(obj_efdm$idx_out, function(x){
+      get_fdr(x, idx_outliers)
+    })
+    tpr_bh$efdm[b, ] <- sapply(obj_efdm$idx_out, function(x){
+      get_tpr(x, idx_outliers)
+    })
+    
+    
     # Save fitted CP objects
     fit_obj[[b]] <- list(
       T_projdepth = obj_T_projdepth$cp_obj,
-      esssup = obj_esssup$cp_obj
+      esssup = obj_esssup$cp_obj,
+      efdm = obj_efdm$cp_obj
     )
     
     
@@ -225,7 +242,7 @@ for (i in 1:length(res)) {
   )
 }
 
-lapply(res2, function(sim){
+res3 <- lapply(res2, function(sim){
   sub <- paste0(
     rbind(fdr = colMeans(sim$fdr),
           tpr = colMeans(sim$tpr)) %>% 
@@ -244,6 +261,9 @@ lapply(res2, function(sim){
   sub <- data.frame(sub)
   sub
 })
+res3
 
-
+rbind(res3[[1]], res3[[2]], res3[[3]], res3[[4]]) %>% 
+  t() %>% 
+  xtable::xtable()
 

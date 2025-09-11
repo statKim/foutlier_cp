@@ -1,43 +1,35 @@
-library(tidyverse)
-library(fdaoutlier)
-library(progress)
-
-source("R/foutlier_cp.R")
-
 ########################################
 ### ADHD-200 fMRI Data
 ########################################
+library(tidyverse)
+library(progress)  # show progress bar
+
+source("R/foutlier_cp.R")
+
 load("RData/ADHD-200_Schaefer17_400regions.RData")
 
 # Fast Fourier Transform with smoothing splines
 # Guo, X., Li, Y., & Hsing, T. (2023). Variable Selection and Minimax Prediction in High-dimensional Functional Linear Models. arXiv preprint arXiv:2310.14419.
-X_fft <- X
 X_fft_sm <- X
 for (i in 1:p) {
   print(i)
-  X_i_fft <- apply(X[, , i], 1, function(x) {
-    Mod(fft(x)) * (2/m)
-  })
   
   X_i_fft_sm <- apply(X[, , i], 1, function(x) {
     smooth.spline(Mod(fft(x)) * (2/m))$y
   })
   
-  X_fft[, , i] <- t(X_i_fft)
   X_fft_sm[, , i] <- t(X_i_fft_sm)
 }
 
 
-### Simulation for X, X_fft, X_fft_sm
+### Simulation for X, X_fft_sm
 B <- 100  # number of simulations
 alpha <- 0.2   # coverage level
 n_cores <- 10   # number of cores
 
 res <- list()
-for (sim_model_idx in 1:3) {
+for (sim_model_idx in 1:2) {
   if (sim_model_idx == 2) {
-    X <- X_fft
-  } else if (sim_model_idx == 3) {
     X <- X_fft_sm
   }
   
@@ -91,7 +83,8 @@ for (sim_model_idx in 1:3) {
   fdr_bh <- list(
     T_projdepth = fdr_res,
     projdepth = fdr_res,
-    esssup = fdr_res
+    esssup = fdr_res,
+    efdm = fdr_res
   )
   tpr_bh <- fdr_bh
   
@@ -183,6 +176,21 @@ for (sim_model_idx in 1:3) {
     })
     
     
+    # EFDM
+    obj_efdm <- foutlier_cp(X = data_train, 
+                            X_test = data_test,
+                            type = "efdm",
+                            alpha = alpha,
+                            n_cores = n_cores,
+                            seed = b)
+    fdr_bh$efdm[b, ] <- sapply(obj_efdm$idx_out, function(x){
+      get_fdr(idx_test[x], idx_outliers)
+    })
+    tpr_bh$efdm[b, ] <- sapply(obj_efdm$idx_out, function(x){
+      get_tpr(idx_test[x], idx_outliers)
+    })
+    
+    
     ### Existing functional outlier detection (Coverage guarantee X)
     idx_comparison <- list(
       # ms = c(),
@@ -264,7 +272,7 @@ for (i in 1:length(res)) {
   )
 }
 
-lapply(res2, function(sim){
+res3 <- lapply(res2, function(sim){
   sub <- paste0(
     rbind(fdr = colMeans(sim$fdr),
           tpr = colMeans(sim$tpr)) %>% 
@@ -283,8 +291,5 @@ lapply(res2, function(sim){
   sub <- data.frame(sub)
   sub
 })
-
-
-
-
+res3
 

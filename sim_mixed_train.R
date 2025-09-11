@@ -3,8 +3,7 @@
 ### - Outlier detection for mixed training set
 ######################################################
 library(tidyverse)
-library(fdaoutlier)
-library(progress)
+library(progress)  # show progress bar
 source("R/foutlier_cp.R")
 
 n <- 1000   # number of training data (proper training + calibration)
@@ -16,6 +15,7 @@ outlier_rate <- 0.2   # proportion of training outliers
 alpha <- 0.1  # coverage level
 
 sim_model <- 1:4  # simulation models
+
 
 # Simulation
 res <- list()
@@ -39,6 +39,7 @@ for (sim_model_idx in 1:length(sim_model)) {
     T_projdepth = rep(NA, B),
     projdepth = rep(NA, B),
     esssup = rep(NA, B),
+    efdm = rep(NA, B),
     ms = rep(NA, B),
     seq = rep(NA, B)
   )
@@ -77,6 +78,11 @@ for (sim_model_idx in 1:length(sim_model)) {
                                 idx_outliers)
     tpr$projdepth[b] <- get_tpr(setdiff(1:n, obj_T_projdepth$idx_clean_null_indiv[[1]]$idx_clean_null),
                                 idx_outliers)
+    
+    # EFDM
+    obj_efdm <- get_clean_null(data_train, type = "efdm", n_cores = n_cores)
+    fdr$efdm[b] <- get_fdr(setdiff(1:n, obj_efdm$idx_clean_null), idx_outliers)
+    tpr$efdm[b] <- get_tpr(setdiff(1:n, obj_efdm$idx_clean_null), idx_outliers)
     
     
     ### Existing functional outlier detection
