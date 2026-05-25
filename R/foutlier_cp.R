@@ -834,15 +834,15 @@ plot.foutlier_sim_mfd <- function(obj, p = 1, xlabel = "", ylabel = "", plot_tit
   idx_outliers <- obj$idx_outliers
   
   n <- nrow(data)
-  p <- ncol(data)
-  gr <- seq(0, 1, length.out = p)
+  m <- ncol(data)
+  gr <- seq(0, 1, length.out = m)
   
   if (length(idx_outliers) > 0) {
     data_null <- t(data[-idx_outliers, , drop = F])
     data_out <- t(data[idx_outliers, , drop = F])
     
     plot(x = gr, type = "n", ylab = ylabel, xlab = xlabel,
-         ylim = range(data) + c(-.5*sd(data[, p]), .5*sd(data[, p])),
+         ylim = range(data) + c(-.5*sd(data[, m]), .5*sd(data[, m])),
          col.lab = "gray20", axes = F)
     # grid(col = "grey75", lwd = .3)
     grid()
@@ -856,7 +856,7 @@ plot.foutlier_sim_mfd <- function(obj, p = 1, xlabel = "", ylabel = "", plot_tit
              lwd = 1.3)
   } else {
     plot(x = gr, type = "n", ylab = ylabel, xlab = xlabel,
-         ylim = range(data) + c(-.5*sd(data[, p]), .5*sd(data[, p])),
+         ylim = range(data) + c(-.5*sd(data[, m]), .5*sd(data[, m])),
          col.lab = "gray20", axes = F)
     # grid(col = "grey75", lwd = .3)
     grid()

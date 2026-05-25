@@ -6,3 +6,5 @@ Rmd/
 ADHD-200/
 *.Rproj
 .Rhistory
+only_for_revision/
+.positai
